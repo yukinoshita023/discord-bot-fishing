@@ -60,6 +60,65 @@ def buy_bait(user_id: str, bait_type: str, amount: int, cost: int) -> bool:
     return _tx(db.transaction(), ref)
 
 
+def get_fishing_bait(user_id: str) -> dict:
+    doc = _user_ref(user_id).get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    bait = data.get("fishing", {}).get("つりえさ", {})
+    return {k: bait.get(k, 0) for k in ("blue", "green", "red")}
+
+
+def buy_fishing_bait(user_id: str, bait_type: str, cost: int) -> bool:
+    ref = _user_ref(user_id)
+
+    @firestore.transactional
+    def _tx(transaction, ref):
+        doc = ref.get(transaction=transaction)
+        data = doc.to_dict() if doc.exists else {}
+        pts = int(data.get("points", {}).get("わくせい", 0))
+        if pts < cost:
+            return False
+        current = data.get("fishing", {}).get("つりえさ", {}).get(bait_type, 0)
+        transaction.update(ref, {
+            "points.わくせい": pts - cost,
+            f"fishing.つりえさ.{bait_type}": current + 1,
+        })
+        return True
+
+    return _tx(db.transaction(), ref)
+
+
+def get_fishing_rods(user_id: str) -> dict:
+    doc = _user_ref(user_id).get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    rods = data.get("fishing", {}).get("釣り竿", {})
+    return {k: bool(rods.get(k, False)) for k in ("blue", "green", "red")}
+
+
+def buy_fishing_rod(user_id: str, rod_type: str, cost: int) -> str:
+    """Returns "bought", "already_owned", or "insufficient"."""
+    ref = _user_ref(user_id)
+
+    @firestore.transactional
+    def _tx(transaction, ref):
+        doc = ref.get(transaction=transaction)
+        data = doc.to_dict() if doc.exists else {}
+        rods = data.get("fishing", {}).get("釣り竿", {})
+        if rods.get(rod_type, False):
+            return "already_owned"
+
+        pts = int(data.get("points", {}).get("わくせい", 0))
+        if pts < cost:
+            return "insufficient"
+
+        transaction.update(ref, {
+            "points.わくせい": pts - cost,
+            f"fishing.釣り竿.{rod_type}": True,
+        })
+        return "bought"
+
+    return _tx(db.transaction(), ref)
+
+
 def get_inventory(user_id: str) -> list:
     doc = _user_ref(user_id).get()
     return (doc.to_dict() or {}).get("fish_inventory", []) if doc.exists else []
