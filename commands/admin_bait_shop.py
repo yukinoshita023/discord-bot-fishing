@@ -1,4 +1,5 @@
 import discord
+from config import ADMIN_ROLE_ID
 from features.firebase_client import get_points, get_fishing_bait, buy_fishing_bait
 from features.fish_data import FISHING_BAIT_SHOP
 
@@ -49,9 +50,12 @@ class BaitShopView(discord.ui.View):
 async def setup(bot):
     bot.add_view(BaitShopView())
 
-    @bot.tree.command(name="bait_shop_setup", description="【管理者用】釣り餌ショップのパネルを設置する")
-    @discord.app_commands.default_permissions(administrator=True)
-    async def bait_shop_setup(interaction: discord.Interaction):
+    @bot.tree.command(name="admin_bait_shop", description="【管理課専用】釣り餌ショップのパネルを設置する")
+    async def admin_bait_shop(interaction: discord.Interaction):
+        if not any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles):
+            await interaction.response.send_message("このコマンドは管理課ロール専用です。", ephemeral=True)
+            return
+
         channel = bot.get_channel(BAIT_SHOP_CHANNEL_ID)
         if channel is None:
             await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True)
