@@ -36,19 +36,20 @@ class RodShopView(discord.ui.View):
             )
             return
 
+        remaining_pts = get_points(user_id)
         await interaction.response.send_message(
-            f"✅ **{info['name']}** を購入しました（−{info['cost']}WP）", ephemeral=True
+            f"✅ **{info['name']}** を購入しました（−{info['cost']}WP、残高: {remaining_pts}WP）", ephemeral=True
         )
 
-    @discord.ui.button(label="青釣り竿 (1000WP)", style=discord.ButtonStyle.primary, custom_id="fishing_rod_shop:blue")
+    @discord.ui.button(label="青釣り竿 (7WP)", style=discord.ButtonStyle.primary, custom_id="fishing_rod_shop:blue")
     async def buy_blue(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy(interaction, "blue")
 
-    @discord.ui.button(label="緑釣り竿 (10000WP)", style=discord.ButtonStyle.success, custom_id="fishing_rod_shop:green")
+    @discord.ui.button(label="緑釣り竿 (3000WP)", style=discord.ButtonStyle.success, custom_id="fishing_rod_shop:green")
     async def buy_green(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy(interaction, "green")
 
-    @discord.ui.button(label="赤釣り竿 (30000WP)", style=discord.ButtonStyle.danger, custom_id="fishing_rod_shop:red")
+    @discord.ui.button(label="赤釣り竿 (15000WP)", style=discord.ButtonStyle.danger, custom_id="fishing_rod_shop:red")
     async def buy_red(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy(interaction, "red")
 

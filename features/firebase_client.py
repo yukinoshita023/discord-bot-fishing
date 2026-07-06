@@ -17,14 +17,7 @@ def get_points(user_id: str) -> int:
     return int((doc.to_dict() or {}).get("points", {}).get("わくせい", 0))
 
 
-def get_fishing_bait(user_id: str) -> dict:
-    doc = _user_ref(user_id).get()
-    data = (doc.to_dict() or {}) if doc.exists else {}
-    bait = data.get("fishing", {}).get("つりえさ", {})
-    return {k: bait.get(k, 0) for k in ("blue", "green", "red")}
-
-
-def buy_fishing_bait(user_id: str, bait_type: str, cost: int) -> bool:
+def spend_points(user_id: str, amount: int) -> bool:
     ref = _user_ref(user_id)
 
     @firestore.transactional
@@ -32,29 +25,9 @@ def buy_fishing_bait(user_id: str, bait_type: str, cost: int) -> bool:
         doc = ref.get(transaction=transaction)
         data = doc.to_dict() if doc.exists else {}
         pts = int(data.get("points", {}).get("わくせい", 0))
-        if pts < cost:
+        if pts < amount:
             return False
-        current = data.get("fishing", {}).get("つりえさ", {}).get(bait_type, 0)
-        transaction.update(ref, {
-            "points.わくせい": pts - cost,
-            f"fishing.つりえさ.{bait_type}": current + 1,
-        })
-        return True
-
-    return _tx(db.transaction(), ref)
-
-
-def use_fishing_bait(user_id: str, bait_type: str) -> bool:
-    ref = _user_ref(user_id)
-
-    @firestore.transactional
-    def _tx(transaction, ref):
-        doc = ref.get(transaction=transaction)
-        data = doc.to_dict() if doc.exists else {}
-        count = data.get("fishing", {}).get("つりえさ", {}).get(bait_type, 0)
-        if count <= 0:
-            return False
-        transaction.update(ref, {f"fishing.つりえさ.{bait_type}": count - 1})
+        transaction.update(ref, {"points.わくせい": pts - amount})
         return True
 
     return _tx(db.transaction(), ref)
