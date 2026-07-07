@@ -34,12 +34,14 @@ _BASE_PROBS = {
     5: [0.04, 0.18, 0.33, 0.38, 0.07],
 }
 
-# 竿ごとの各レアリティ倍率 [ごみ, 小魚, 中魚, 大魚, リヴァイアサン]
+# 竿ごとの各レアリティ出現倍率 [ごみ, 小魚, 中魚, 大魚, リヴァイアサン]
 # 掛け金は確率に一切影響しない（単なる毎回のコスト）。竿だけが確率を左右する。
+# 配当倍率(RARITY_PAYOUT_MULT)は見た目重視の固定階段とし、期待値の調整はこちらの出現率で行う。
+# 各竿のピク5戦略期待値: 青≒1.0倍 / 緑≒1.2倍 / 赤≒1.5倍
 _ROD_MULT = {
-    "blue":  [1.0, 1.0, 1.0, 1.0, 1.0],
+    "blue":  [1.0, 1.0, 1.75, 1.0, 1.0],
     "green": [1.0, 1.0, 1.0, 0.6, 1.0],
-    "red":   [1.0, 1.0, 1.0, 1.3, 1.0],
+    "red":   [1.0, 1.0, 1.0, 1.0, 0.1],
 }
 
 # 竿・ピク数ごとに釣れる最大レアリティ（RARITIESのインデックス）。
@@ -54,19 +56,21 @@ def _max_rarity_index(rod_type: str, piku: int) -> int:
     raise ValueError(f"unknown rod_type: {rod_type}")
 
 
-VOICE_TOP_TIER_BOOST = 0.05  # 通話中、その時点で狙える最高レアリティの確率加算
+# 通話中、その時点で狙える最高レアリティの出現率を1.5倍にする
+# （固定加算だと超レアのリヴァイアサンで確率が跳ね上がりすぎるため乗算方式）
+VOICE_TOP_TIER_MULT = 1.5
 
 ESCAPE_CHANCE = 0.20  # 「もっと待つ」ごとに20%で逃げる
 
 # レアリティごとの配当倍率。獲得pt = 掛け金 × この倍率（確率には影響しない）
-# ピク5まで粘る戦略の期待値が 青竿≒1.0倍 / 緑竿≒1.2倍 / 赤竿≒1.5倍 になるよう調整済み
+# プレイヤーに見せる数字なのできれいな階段にする。期待値の調整は_ROD_MULT（出現率）側で行う。
 # （渋め→実際のプレイ感を見て緩める方針。インフレは戻すのが難しいため）
 RARITY_PAYOUT_MULT = {
     "trash":     0,
     "small":     1.2,
-    "medium":    3.5,
-    "large":     4,
-    "leviathan": 12,
+    "medium":    3,
+    "large":     5,
+    "leviathan": 50,
 }
 
 RARITIES = ["trash", "small", "medium", "large", "leviathan"]
@@ -114,7 +118,7 @@ def roll_fish(piku: int, rod_type: str, in_voice: bool) -> dict:
         probs[i] = 0.0
 
     if in_voice:
-        probs[max_index] += VOICE_TOP_TIER_BOOST
+        probs[max_index] *= VOICE_TOP_TIER_MULT
 
     total = sum(probs)
     probs = [p / total for p in probs]
