@@ -19,18 +19,32 @@ _PIKU_TEXT = {
 }
 
 
+FISHING_TIMEOUT_SECONDS = 600  # 放置された釣りセッションの自動終了（ロック解放）までの時間
+
+
 class FishingView(discord.ui.View):
-    def __init__(self, user_id: int, rod_type: str, wager: int, piku: int):
-        super().__init__(timeout=None)
+    def __init__(self, user_id: int, rod_type: str, wager: int, piku: int, origin: discord.Interaction):
+        super().__init__(timeout=FISHING_TIMEOUT_SECONDS)
         self.user_id = user_id
         self.rod_type = rod_type
         self.wager = wager
         self.piku = piku
+        self.origin = origin
 
         if piku >= 5:
             for item in self.children:
                 if isinstance(item, discord.ui.Button) and "待つ" in (item.label or ""):
                     item.disabled = True
+
+    async def on_timeout(self):
+        # メッセージを閉じた・放置した場合でもロックを解放する（掛け金は没収）
+        active_fishing.discard(self.user_id)
+        try:
+            await self.origin.edit_original_response(
+                content="⌛ 長時間反応がなかったため、魚は逃げてしまいました...", view=None
+            )
+        except discord.HTTPException:
+            pass
 
     @discord.ui.button(label="🎣 釣り上げる！", style=discord.ButtonStyle.success)
     async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -81,7 +95,7 @@ class FishingView(discord.ui.View):
             return
 
         new_piku = self.piku + 1
-        view = FishingView(self.user_id, self.rod_type, self.wager, new_piku)
+        view = FishingView(self.user_id, self.rod_type, self.wager, new_piku, interaction)
         await interaction.response.edit_message(content=_PIKU_TEXT[new_piku], view=view)
 
 
@@ -93,6 +107,16 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
         self.rod_type = rod_type
 
     async def on_submit(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+
+        # ボタン押下時にもチェックしているが、モーダルを複数開いて同時送信する
+        # 二重掛け金を防ぐため、送信時点でも再チェックする
+        if user_id in active_fishing:
+            await interaction.response.send_message(
+                "すでに釣り中です！先に結果を確認してください。", ephemeral=True
+            )
+            return
+
         try:
             wager = int(self.amount.value)
         except ValueError:
@@ -103,7 +127,6 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
             await interaction.response.send_message("1WP以上を指定してください。", ephemeral=True)
             return
 
-        user_id = interaction.user.id
         pts = get_points(str(user_id))
         if pts < wager:
             await interaction.response.send_message(
@@ -123,7 +146,7 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
 
         await asyncio.sleep(1.5)
 
-        view = FishingView(user_id, self.rod_type, wager, 1)
+        view = FishingView(user_id, self.rod_type, wager, 1, interaction)
         await interaction.edit_original_response(content=_PIKU_TEXT[1], view=view)
 
 
