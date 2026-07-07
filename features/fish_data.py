@@ -1,67 +1,124 @@
 import random
 
-BAIT_TYPES = {
-    "normal":  {"name": "普通の餌",  "cost": 50},
-    "special": {"name": "上等な餌",  "cost": 150},
-    "premium": {"name": "高級な餌",  "cost": 400},
+# 釣り竿ショップ（チャンネル設置パネル）で購入できる釣り竿（一度買うと永久所持）
+# 何も持っていないと釣り自体ができない（青竿が実質の入場料）
+FISHING_ROD_SHOP = {
+    "blue":  {"name": "青釣り竿", "cost": 7},
+    "green": {"name": "緑釣り竿", "cost": 3000},
+    "red":   {"name": "赤釣り竿", "cost": 15000},
 }
 
-# 確率テーブル [コモン, アンコモン, レア, 伝説] ピク数ごと
+ROD_DISPLAY_NAMES = {
+    "blue":  FISHING_ROD_SHOP["blue"]["name"],
+    "green": FISHING_ROD_SHOP["green"]["name"],
+    "red":   FISHING_ROD_SHOP["red"]["name"],
+}
+
+# 竿の強い順（自動選択に使う）
+ROD_RANK_BEST_FIRST = ["red", "green", "blue"]
+
+
+def best_owned_rod(owned_rods: dict) -> str | None:
+    for rod_type in ROD_RANK_BEST_FIRST:
+        if owned_rods.get(rod_type):
+            return rod_type
+    return None
+
+
+# 確率テーブル [ごみ, 小魚, 中魚, 大魚, リヴァイアサン] ピク数ごと
 _BASE_PROBS = {
-    1: [0.70, 0.22, 0.07, 0.01],
-    2: [0.60, 0.25, 0.12, 0.03],
-    3: [0.45, 0.28, 0.20, 0.07],
-    4: [0.30, 0.28, 0.28, 0.14],
-    5: [0.15, 0.25, 0.35, 0.25],
+    1: [0.55, 0.37, 0.07, 0.01, 0.00],
+    2: [0.40, 0.40, 0.15, 0.05, 0.00],
+    3: [0.25, 0.38, 0.24, 0.12, 0.01],
+    4: [0.12, 0.30, 0.32, 0.24, 0.02],
+    5: [0.04, 0.18, 0.33, 0.38, 0.07],
 }
 
-# 餌ごとの各レアリティ倍率 [コモン, アンコモン, レア, 伝説]
-_BAIT_MULT = {
-    "normal":  [1.0, 1.0, 1.0, 1.0],
-    "special": [0.7, 0.9, 1.5, 2.0],
-    "premium": [0.4, 0.7, 2.0, 3.5],
+# 竿ごとの各レアリティ出現倍率 [ごみ, 小魚, 中魚, 大魚, リヴァイアサン]
+# 掛け金は確率に一切影響しない（単なる毎回のコスト）。竿だけが確率を左右する。
+# 配当倍率(RARITY_PAYOUT_MULT)は見た目重視の固定階段とし、期待値の調整はこちらの出現率で行う。
+# 各竿のピク5戦略期待値: 青≒1.0倍 / 緑≒1.2倍 / 赤≒1.5倍
+_ROD_MULT = {
+    "blue":  [1.0, 1.0, 1.75, 1.0, 1.0],
+    "green": [1.0, 1.0, 1.0, 0.6, 1.0],
+    "red":   [1.0, 1.0, 1.0, 1.0, 0.1],
 }
 
-VOICE_LEGENDARY_BOOST = 0.05  # 通話中の伝説確率加算
+# 竿・ピク数ごとに釣れる最大レアリティ（RARITIESのインデックス）。
+# 各竿の最上位レアリティは終盤のピクでしか解禁されない。
+def _max_rarity_index(rod_type: str, piku: int) -> int:
+    if rod_type == "blue":
+        return 2 if piku >= 4 else 1   # 中魚はピク4-5のみ
+    if rod_type == "green":
+        return 3 if piku >= 4 else 2   # 大魚はピク4-5のみ
+    if rod_type == "red":
+        return 4 if piku == 5 else 3   # リヴァイアサンはピク5のみ
+    raise ValueError(f"unknown rod_type: {rod_type}")
+
+
+# 通話中、その時点で狙える最高レアリティの出現率を1.5倍にする
+# （固定加算だと超レアのリヴァイアサンで確率が跳ね上がりすぎるため乗算方式）
+VOICE_TOP_TIER_MULT = 1.5
 
 ESCAPE_CHANCE = 0.20  # 「もっと待つ」ごとに20%で逃げる
 
-RARITIES = ["common", "uncommon", "rare", "legendary"]
+# レアリティごとの配当倍率。獲得pt = 掛け金 × この倍率（確率には影響しない）
+# プレイヤーに見せる数字なのできれいな階段にする。期待値の調整は_ROD_MULT（出現率）側で行う。
+# （渋め→実際のプレイ感を見て緩める方針。インフレは戻すのが難しいため）
+RARITY_PAYOUT_MULT = {
+    "trash":     0,
+    "small":     1.2,
+    "medium":    3,
+    "large":     5,
+    "leviathan": 50,
+}
+
+RARITIES = ["trash", "small", "medium", "large", "leviathan"]
 
 RARITY_DISPLAY = {
-    "common":    {"star": "★",    "label": "コモン"},
-    "uncommon":  {"star": "★★",   "label": "アンコモン"},
-    "rare":      {"star": "★★★",  "label": "レア"},
-    "legendary": {"star": "★★★★", "label": "伝説"},
+    "trash":     {"star": "☆",     "label": "ごみ"},
+    "small":     {"star": "★",     "label": "小魚"},
+    "medium":    {"star": "★★",    "label": "中魚"},
+    "large":     {"star": "★★★",   "label": "大魚"},
+    "leviathan": {"star": "★★★★",  "label": "リヴァイアサン"},
 }
 
-# モック魚データ（名前・画像は後で差し替え）
 FISH_TABLE = {
-    "common": [
-        {"name": "フナ",   "sell_price": 30},
-        {"name": "コイ",   "sell_price": 45},
-        {"name": "モロコ", "sell_price": 35},
+    "trash": [
+        {"name": "ブーツ", "image": "boots.png"},
+        {"name": "タイヤ", "image": "tire.png"},
     ],
-    "uncommon": [
-        {"name": "サーモン", "sell_price": 130},
-        {"name": "マス",     "sell_price": 150},
+    "small": [
+        {"name": "ホーンフィッシュ",       "image": "horn_fish.png"},
+        {"name": "ポイズナー",             "image": "poisner.png"},
+        {"name": "カトラリーシュリンプ",   "image": "cutlery_shrimp.png"},
+        {"name": "ギルフラッグ",           "image": "gill_flag.png"},
     ],
-    "rare": [
-        {"name": "マグロ", "sell_price": 420},
-        {"name": "ヒラメ", "sell_price": 450},
+    "medium": [
+        {"name": "マンボウモドキ",   "image": "manbow_modoki.png"},
+        {"name": "インスタアロワナ", "image": "insta_arowana.png"},
     ],
-    "legendary": [
-        {"name": "龍魚",     "sell_price": 1200},
-        {"name": "伝説の鯛", "sell_price": 1500},
+    "large": [
+        {"name": "サメクジラ",         "image": "samekujira.png"},
+        {"name": "サンタマンダー",     "image": "santa_mander.png"},
+        {"name": "ジャイアントイール", "image": "giant_eel.png"},
+    ],
+    "leviathan": [
+        {"name": "？？？", "image": "???.png"},
     ],
 }
 
 
-def roll_fish(piku: int, bait_type: str, in_voice: bool) -> dict:
-    probs = [b * m for b, m in zip(_BASE_PROBS[piku], _BAIT_MULT[bait_type])]
+def roll_fish(piku: int, rod_type: str, in_voice: bool) -> dict:
+    probs = list(_BASE_PROBS[piku])
+    probs = [p * m for p, m in zip(probs, _ROD_MULT[rod_type])]
+
+    max_index = _max_rarity_index(rod_type, piku)
+    for i in range(max_index + 1, len(probs)):
+        probs[i] = 0.0
 
     if in_voice:
-        probs[3] += VOICE_LEGENDARY_BOOST
+        probs[max_index] *= VOICE_TOP_TIER_MULT
 
     total = sum(probs)
     probs = [p / total for p in probs]
@@ -70,8 +127,8 @@ def roll_fish(piku: int, bait_type: str, in_voice: bool) -> dict:
     fish = random.choice(FISH_TABLE[rarity])
 
     return {
-        "name":       fish["name"],
-        "sell_price": fish["sell_price"],
-        "rarity":     rarity,
-        "star":       RARITY_DISPLAY[rarity]["star"],
+        "name":   fish["name"],
+        "rarity": rarity,
+        "star":   RARITY_DISPLAY[rarity]["star"],
+        "image":  fish["image"],
     }
