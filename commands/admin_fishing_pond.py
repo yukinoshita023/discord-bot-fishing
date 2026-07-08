@@ -21,6 +21,121 @@ _PIKU_TEXT = {
 
 FISHING_TIMEOUT_SECONDS = 600  # 放置された釣りセッションの自動終了（ロック解放）までの時間
 
+# 掛け金の上限。赤竿の期待値1.22倍×上限1000で、やり込む人が約半月で10万WPに到達するペース
+# （リヴァイアサン一撃は最大50,000WP）
+MAX_WAGER = 1000
+
+PANEL_TITLE = "🎣 わくせいフィッシング"
+
+# パネルを常にチャンネル最下部に保つための再投稿管理
+_panel_message: discord.Message | None = None
+_panel_lock = asyncio.Lock()
+
+
+def _build_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title=PANEL_TITLE,
+        description=(
+            "わくせいポイント（WP）を賭けて魚を釣ろう！\n"
+            "下の **「🎣 釣りをする」** ボタンから掛け金を入力してスタート！\n"
+            "​"
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.add_field(
+        name="🐟 遊び方",
+        value=(
+            "1. ボタンを押して掛け金（WP）を入力\n"
+            "\n"
+            "2. 「ピクっ！」ときたら選択：\n"
+            "　🎣 **釣り上げる** → その場で魚が確定\n"
+            "　⏳ **もっと待つ** → 大物のチャンス！ただし逃げられるかも…\n"
+            "\n"
+            "3. 釣れた魚に応じて配当WPをゲット！\n"
+            "​"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎣 釣り竿",
+        value=(
+            "竿が良いほどレアな魚が釣れる！\n"
+            "（所持している一番良い竿を自動で使用）\n"
+            "購入は釣り竿ショップへ🛒\n"
+            "​"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎤 通話ボーナス",
+        value="通話に参加しながら釣ると、レアな魚が釣れやすくなる！",
+        inline=False,
+    )
+    embed.set_footer(text="釣果は釣りログチャンネルでみんなに公開されます")
+    return embed
+
+
+def _is_panel_message(client: discord.Client, message: discord.Message) -> bool:
+    return (
+        message.author.id == client.user.id
+        and bool(message.embeds)
+        and message.embeds[0].title == PANEL_TITLE
+    )
+
+
+async def refresh_panel(client: discord.Client):
+    """パネルを設置し直す（新規投稿→古いパネルを削除）。/admin_fishing_pondからのみ使用。"""
+    global _panel_message
+
+    async with _panel_lock:
+        channel = client.get_channel(FISHING_POND_CHANNEL_ID)
+        if channel is None:
+            return
+
+        try:
+            new_panel = await channel.send(embed=_build_panel_embed(), view=FishingPondView())
+        except discord.HTTPException:
+            return
+
+        old_panel = _panel_message
+        _panel_message = new_panel
+
+        if old_panel is not None:
+            try:
+                await old_panel.delete()
+            except discord.HTTPException:
+                pass
+        else:
+            # Bot再起動直後などで古いパネルの参照がない場合は履歴から探して掃除する
+            try:
+                async for message in channel.history(limit=30):
+                    if message.id != new_panel.id and _is_panel_message(client, message):
+                        await message.delete()
+            except discord.HTTPException:
+                pass
+
+
+# ユーザーごとの直前セッションのephemeralメッセージ参照。
+# 本人のephemeralが溜まるとその人の画面でパネルが上に流れてしまうため、
+# 次のキャスト開始時（ボタン操作前の安全なタイミング）に前回分を片付ける。
+# タイマーで消すとボタンを押す瞬間にレイアウトがずれて誤クリックを招くため、この方式にしている。
+_last_session_interaction: dict[int, discord.Interaction] = {}
+
+
+def remember_session_message(user_id: int, interaction: discord.Interaction):
+    _last_session_interaction[user_id] = interaction
+
+
+async def cleanup_previous_session_message(user_id: int):
+    prev = _last_session_interaction.pop(user_id, None)
+    if prev is None:
+        return
+    try:
+        await prev.delete_original_response()
+    except discord.HTTPException:
+        # インタラクショントークンの期限（15分）切れなどは無視する
+        pass
+
 
 class FishingView(discord.ui.View):
     def __init__(self, user_id: int, rod_type: str, wager: int, piku: int, origin: discord.Interaction):
@@ -45,6 +160,7 @@ class FishingView(discord.ui.View):
             )
         except discord.HTTPException:
             pass
+        remember_session_message(self.user_id, self.origin)
 
     @discord.ui.button(label="🎣 釣り上げる！", style=discord.ButtonStyle.success)
     async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -54,6 +170,10 @@ class FishingView(discord.ui.View):
 
         self.stop()
         active_fishing.discard(self.user_id)
+
+        # Firestoreへの書き込みが3秒の応答制限を超えることがある（特に起動直後の初回接続）ため、
+        # 先にdeferで応答猶予を確保してから重い処理を行う
+        await interaction.response.defer()
 
         in_voice = interaction.user.voice is not None
         fish = roll_fish(self.piku, self.rod_type, in_voice)
@@ -66,18 +186,25 @@ class FishingView(discord.ui.View):
             f"{fish['star']} **{fish['name']}**\n"
             f"獲得 **+{payout}pt**（所持: {new_total}pt）"
         )
-        await interaction.response.edit_message(content=content, view=None)
+        # discord.Fileは使い回せないため、本人向けとログ向けで別々に生成する
+        ephemeral_image = discord.File(f"images/{fish['image']}", filename=fish["image"])
+        await interaction.edit_original_response(content=content, attachments=[ephemeral_image], view=None)
 
         log_channel = interaction.client.get_channel(FISHING_LOG_CHANNEL_ID)
         if log_channel is not None:
+            profit = payout - self.wager
+            rod_name = ROD_DISPLAY_NAMES[self.rod_type]
             public_image = discord.File(f"images/{fish['image']}", filename=fish["image"])
             await log_channel.send(
                 content=(
                     f"🎉 {interaction.user.mention} が釣り上げた！{voice_bonus}\n"
-                    f"{fish['star']} **{fish['name']}**（**{payout}pt**）"
+                    f"{fish['star']} **{fish['name']}**（{rod_name}）\n"
+                    f"💰 掛け金 **{self.wager}WP** → 獲得 **{payout}WP**（収支 **{profit:+d}WP**）"
                 ),
                 file=public_image,
             )
+
+        remember_session_message(self.user_id, interaction)
 
     @discord.ui.button(label="⏳ もっと待つ...", style=discord.ButtonStyle.secondary)
     async def wait(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -92,6 +219,7 @@ class FishingView(discord.ui.View):
             await interaction.response.edit_message(
                 content="💨 惜しい！もう少しのところで逃げられてしまった...", view=None
             )
+            remember_session_message(self.user_id, interaction)
             return
 
         new_piku = self.piku + 1
@@ -100,11 +228,9 @@ class FishingView(discord.ui.View):
 
 
 class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
-    amount = discord.ui.TextInput(label="掛け金 (WP)", placeholder="例: 100", max_length=10)
-
-    def __init__(self, rod_type: str):
-        super().__init__()
-        self.rod_type = rod_type
+    amount = discord.ui.TextInput(
+        label=f"掛け金 (1〜{MAX_WAGER}WP)", placeholder="例: 100", max_length=10
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -123,30 +249,48 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
             await interaction.response.send_message("半角数字で入力してください。", ephemeral=True)
             return
 
-        if wager <= 0:
-            await interaction.response.send_message("1WP以上を指定してください。", ephemeral=True)
+        if not 1 <= wager <= MAX_WAGER:
+            await interaction.response.send_message(
+                f"掛け金は1〜{MAX_WAGER}WPの間で指定してください。", ephemeral=True
+            )
+            return
+
+        # ここから先はFirestore呼び出しで3秒の応答制限を超えることがあるため、先にdeferする
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # まだボタン操作が始まっていない今のうちに、前回セッションのメッセージを片付ける
+        await cleanup_previous_session_message(user_id)
+
+        rod = best_owned_rod(get_fishing_rods(str(user_id)))
+        if rod is None:
+            await interaction.edit_original_response(
+                content="釣り竿を持っていません！釣り竿ショップで青竿を購入してください。"
+            )
+            remember_session_message(user_id, interaction)
             return
 
         pts = get_points(str(user_id))
         if pts < wager:
-            await interaction.response.send_message(
-                f"WPが足りません。\n指定: **{wager}WP** / 所持: **{pts}WP**", ephemeral=True
+            await interaction.edit_original_response(
+                content=f"WPが足りません。\n指定: **{wager}WP** / 所持: **{pts}WP**"
             )
+            remember_session_message(user_id, interaction)
             return
 
         if not spend_points(str(user_id), wager):
-            await interaction.response.send_message("処理に失敗しました。再度お試しください。", ephemeral=True)
+            await interaction.edit_original_response(content="処理に失敗しました。再度お試しください。")
+            remember_session_message(user_id, interaction)
             return
 
         active_fishing.add(user_id)
-        rod_name = ROD_DISPLAY_NAMES[self.rod_type]
-        await interaction.response.send_message(
-            f"🎣 竿を投げた...（{rod_name} / 掛け金: {wager}WP）", ephemeral=True
+        rod_name = ROD_DISPLAY_NAMES[rod]
+        await interaction.edit_original_response(
+            content=f"🎣 竿を投げた...（{rod_name} / 掛け金: {wager}WP）"
         )
 
         await asyncio.sleep(1.5)
 
-        view = FishingView(user_id, self.rod_type, wager, 1, interaction)
+        view = FishingView(user_id, rod, wager, 1, interaction)
         await interaction.edit_original_response(content=_PIKU_TEXT[1], view=view)
 
 
@@ -164,14 +308,9 @@ class FishingPondView(discord.ui.View):
             )
             return
 
-        rod = best_owned_rod(get_fishing_rods(str(user_id)))
-        if rod is None:
-            await interaction.response.send_message(
-                "釣り竿を持っていません！釣り竿ショップで青竿を購入してください。", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(WagerModal(rod))
+        # モーダル表示はdeferできず3秒制限が厳しいため、Firestoreを触る
+        # 竿の所持チェックはモーダル送信後（WagerModal.on_submit）に行う
+        await interaction.response.send_modal(WagerModal())
 
 
 async def setup(bot):
@@ -188,8 +327,6 @@ async def setup(bot):
             await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True)
             return
 
-        await channel.send(
-            content="🎣 ここで釣りができます！ボタンを押して掛け金を入力してください。",
-            view=FishingPondView(),
-        )
-        await interaction.response.send_message("釣り堀のパネルを設置しました。", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await refresh_panel(bot)
+        await interaction.edit_original_response(content="釣り堀のパネルを設置しました。")
