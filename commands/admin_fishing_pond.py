@@ -19,7 +19,7 @@ _PIKU_TEXT = {
 }
 
 
-FISHING_TIMEOUT_SECONDS = 600  # 放置された釣りセッションの自動終了（ロック解放）までの時間
+FISHING_TIMEOUT_SECONDS = 180  # 放置された釣りセッションの自動終了（ロック解放）までの時間
 
 # 掛け金の上限。赤竿の期待値1.22倍×上限1000で、やり込む人が約半月で10万WPに到達するペース
 # （リヴァイアサン一撃は最大50,000WP）
@@ -216,8 +216,12 @@ class FishingView(discord.ui.View):
 
         if random.random() < ESCAPE_CHANCE:
             active_fishing.discard(self.user_id)
-            await interaction.response.edit_message(
-                content="💨 惜しい！もう少しのところで逃げられてしまった...", view=None
+            # 所持WPの取得（Firestore）が3秒制限を超えることがあるため先にdeferする
+            await interaction.response.defer()
+            pts = get_points(str(self.user_id))
+            await interaction.edit_original_response(
+                content=f"💨 惜しい！もう少しのところで逃げられてしまった...（所持: {pts}pt）",
+                view=None,
             )
             remember_session_message(self.user_id, interaction)
             return
