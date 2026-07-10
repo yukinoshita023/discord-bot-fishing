@@ -179,7 +179,8 @@ class FishingView(discord.ui.View):
         fish = roll_fish(self.piku, self.rod_type, in_voice)
         payout = int(self.wager * RARITY_PAYOUT_MULT[fish["rarity"]])
 
-        new_total = sell_fish(str(self.user_id), payout)
+        # Firestore呼び出しは同期APIなので、イベントループを止めないよう別スレッドで実行する
+        new_total = await asyncio.to_thread(sell_fish, str(self.user_id), payout)
         voice_bonus = " 🎤通話ボーナス中！" if in_voice else ""
         content = (
             f"🎉 釣り上げた！{voice_bonus}\n"
@@ -188,7 +189,11 @@ class FishingView(discord.ui.View):
         )
         # discord.Fileは使い回せないため、本人向けとログ向けで別々に生成する
         ephemeral_image = discord.File(f"images/{fish['image']}", filename=fish["image"])
-        await interaction.edit_original_response(content=content, attachments=[ephemeral_image], view=None)
+        try:
+            await interaction.edit_original_response(content=content, attachments=[ephemeral_image], view=None)
+        except discord.HTTPException:
+            # 本人向け表示に失敗しても配当は付与済みのため、公開ログの投稿は続行する
+            pass
 
         log_channel = interaction.client.get_channel(FISHING_LOG_CHANNEL_ID)
         if log_channel is not None:
@@ -218,7 +223,7 @@ class FishingView(discord.ui.View):
             active_fishing.discard(self.user_id)
             # 所持WPの取得（Firestore）が3秒制限を超えることがあるため先にdeferする
             await interaction.response.defer()
-            pts = get_points(str(self.user_id))
+            pts = await asyncio.to_thread(get_points, str(self.user_id))
             await interaction.edit_original_response(
                 content=f"💨 惜しい！もう少しのところで逃げられてしまった...（所持: {pts}pt）",
                 view=None,
@@ -228,7 +233,12 @@ class FishingView(discord.ui.View):
 
         new_piku = self.piku + 1
         view = FishingView(self.user_id, self.rod_type, self.wager, new_piku, interaction)
-        await interaction.response.edit_message(content=_PIKU_TEXT[new_piku], view=view)
+        try:
+            await interaction.response.edit_message(content=_PIKU_TEXT[new_piku], view=view)
+        except discord.HTTPException:
+            # self.stop()済みのためon_timeoutによる解放も効かない。
+            # 編集に失敗したらロックを解放しないと永久に釣り不能になる（掛け金は没収）
+            active_fishing.discard(self.user_id)
 
 
 class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
@@ -265,7 +275,7 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
         # まだボタン操作が始まっていない今のうちに、前回セッションのメッセージを片付ける
         await cleanup_previous_session_message(user_id)
 
-        rod = best_owned_rod(get_fishing_rods(str(user_id)))
+        rod = best_owned_rod(await asyncio.to_thread(get_fishing_rods, str(user_id)))
         if rod is None:
             await interaction.edit_original_response(
                 content="釣り竿を持っていません！釣り竿ショップで青竿を購入してください。"
@@ -273,7 +283,7 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
             remember_session_message(user_id, interaction)
             return
 
-        pts = get_points(str(user_id))
+        pts = await asyncio.to_thread(get_points, str(user_id))
         if pts < wager:
             await interaction.edit_original_response(
                 content=f"WPが足りません。\n指定: **{wager}WP** / 所持: **{pts}WP**"
@@ -281,7 +291,7 @@ class WagerModal(discord.ui.Modal, title="釣りの掛け金"):
             remember_session_message(user_id, interaction)
             return
 
-        if not spend_points(str(user_id), wager):
+        if not await asyncio.to_thread(spend_points, str(user_id), wager):
             await interaction.edit_original_response(content="処理に失敗しました。再度お試しください。")
             remember_session_message(user_id, interaction)
             return
