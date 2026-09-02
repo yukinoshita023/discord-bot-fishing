@@ -37,11 +37,19 @@ _BASE_PROBS = {
 # 竿ごとの各レアリティ出現倍率 [ごみ, 小魚, 中魚, 大魚, リヴァイアサン]
 # 掛け金は確率に一切影響しない（単なる毎回のコスト）。竿だけが確率を左右する。
 # 配当倍率(RARITY_PAYOUT_MULT)は見た目重視の固定階段とし、期待値の調整はこちらの出現率で行う。
-# 各竿のピク5戦略期待値: 青≒1.05倍 / 緑≒1.15倍 / 赤≒1.2倍
+# 最適戦略の期待値: 青≒1.05倍(ピク5) / 緑≒1.15倍(ピク5) / 赤≒1.2倍(ピク5)
 _ROD_MULT = {
-    "blue":  [1.0, 1.0, 2.0, 1.0, 1.0],
+    "blue":  [1.0, 1.0, 1.0, 1.0, 1.0],
     "green": [1.0, 1.0, 1.0, 0.4, 1.0],
     "red":   [1.0, 1.1, 0.9, 0.4, 0.05],
+}
+
+# ピク5限定の追加出現倍率。「5まで粘った人へのご褒美」で、常にピク5止めが最適になるようにする
+# （青竿は以前ピク4から中魚ブーストが効いていたため、ピク4止めが最適になってしまっていた）
+_ROD_PIKU5_MULT = {
+    "blue":  [1.0, 1.0, 2.5, 1.0, 1.0],
+    "green": [1.0, 1.0, 1.0, 1.0, 1.0],
+    "red":   [1.0, 1.0, 1.0, 1.0, 1.0],
 }
 
 # 竿・ピク数ごとに釣れる最大レアリティ（RARITIESのインデックス）。
@@ -112,6 +120,9 @@ FISH_TABLE = {
 def roll_fish(piku: int, rod_type: str, in_voice: bool) -> dict:
     probs = list(_BASE_PROBS[piku])
     probs = [p * m for p, m in zip(probs, _ROD_MULT[rod_type])]
+
+    if piku == 5:
+        probs = [p * m for p, m in zip(probs, _ROD_PIKU5_MULT[rod_type])]
 
     max_index = _max_rarity_index(rod_type, piku)
     for i in range(max_index + 1, len(probs)):

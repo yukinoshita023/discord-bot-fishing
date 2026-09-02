@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from config import ADMIN_ROLE_ID
 from features.firebase_client import get_points, buy_fishing_rod
@@ -15,30 +16,30 @@ class RodShopView(discord.ui.View):
         info = FISHING_ROD_SHOP[rod_type]
         user_id = str(interaction.user.id)
 
-        pts = get_points(user_id)
+        # Firestore呼び出しが3秒の応答制限を超えることがあるため、先にdeferする。
+        # 別スレッド実行(to_thread)でイベントループも塞がない
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        pts = await asyncio.to_thread(get_points, user_id)
         if pts < info["cost"]:
-            await interaction.response.send_message(
-                f"WPが足りません。\n必要: **{info['cost']}WP** / 所持: **{pts}WP**",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content=f"WPが足りません。\n必要: **{info['cost']}WP** / 所持: **{pts}WP**"
             )
             return
 
-        result = buy_fishing_rod(user_id, rod_type, info["cost"])
+        result = await asyncio.to_thread(buy_fishing_rod, user_id, rod_type, info["cost"])
         if result == "already_owned":
-            await interaction.response.send_message(
-                f"**{info['name']}** は購入済みです。", ephemeral=True
-            )
+            await interaction.edit_original_response(content=f"**{info['name']}** は購入済みです。")
             return
         if result == "insufficient":
-            await interaction.response.send_message(
-                f"WPが足りません。\n必要: **{info['cost']}WP** / 所持: **{pts}WP**",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content=f"WPが足りません。\n必要: **{info['cost']}WP** / 所持: **{pts}WP**"
             )
             return
 
-        remaining_pts = get_points(user_id)
-        await interaction.response.send_message(
-            f"✅ **{info['name']}** を購入しました（−{info['cost']}WP、残高: {remaining_pts}WP）", ephemeral=True
+        remaining_pts = await asyncio.to_thread(get_points, user_id)
+        await interaction.edit_original_response(
+            content=f"✅ **{info['name']}** を購入しました（−{info['cost']}WP、残高: {remaining_pts}WP）"
         )
 
     @discord.ui.button(label="青釣り竿 (7WP)", style=discord.ButtonStyle.primary, custom_id="fishing_rod_shop:blue")
