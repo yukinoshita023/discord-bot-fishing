@@ -25,31 +25,31 @@ def best_owned_rod(owned_rods: dict) -> str | None:
     return None
 
 
-# 確率テーブル [ごみ, 小魚, 中魚, 大魚, リヴァイアサン] ピク数ごと
+# 確率テーブル [ごみ, 小魚, 中魚, 大魚, 人魚, リヴァイアサン] ピク数ごと
 _BASE_PROBS = {
-    1: [0.55, 0.37, 0.07, 0.01, 0.00],
-    2: [0.40, 0.40, 0.15, 0.05, 0.00],
-    3: [0.25, 0.38, 0.24, 0.12, 0.01],
-    4: [0.12, 0.30, 0.32, 0.24, 0.02],
-    5: [0.04, 0.18, 0.33, 0.38, 0.07],
+    1: [0.55, 0.37, 0.07, 0.01, 0.00, 0.00],
+    2: [0.40, 0.40, 0.15, 0.05, 0.00, 0.00],
+    3: [0.25, 0.38, 0.24, 0.12, 0.00, 0.00],
+    4: [0.12, 0.30, 0.32, 0.24, 0.02, 0.00],
+    5: [0.04, 0.18, 0.33, 0.38, 0.05, 0.07],
 }
 
-# 竿ごとの各レアリティ出現倍率 [ごみ, 小魚, 中魚, 大魚, リヴァイアサン]
+# 竿ごとの各レアリティ出現倍率 [ごみ, 小魚, 中魚, 大魚, 人魚, リヴァイアサン]
 # 掛け金は確率に一切影響しない（単なる毎回のコスト）。竿だけが確率を左右する。
 # 配当倍率(RARITY_PAYOUT_MULT)は見た目重視の固定階段とし、期待値の調整はこちらの出現率で行う。
 # 最適戦略の期待値: 青≒1.05倍(ピク5) / 緑≒1.15倍(ピク5) / 赤≒1.2倍(ピク5)
 _ROD_MULT = {
-    "blue":  [1.0, 1.0, 1.0, 1.0, 1.0],
-    "green": [1.0, 1.0, 1.0, 0.4, 1.0],
-    "red":   [1.0, 1.1, 0.9, 0.4, 0.05],
+    "blue":  [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    "green": [1.0, 1.0, 1.0, 0.4, 0.10, 1.0],
+    "red":   [1.0, 1.1, 0.9, 0.4, 0.15, 0.05],
 }
 
 # ピク5限定の追加出現倍率。「5まで粘った人へのご褒美」で、常にピク5止めが最適になるようにする
 # （青竿は以前ピク4から中魚ブーストが効いていたため、ピク4止めが最適になってしまっていた）
 _ROD_PIKU5_MULT = {
-    "blue":  [1.0, 1.0, 2.5, 1.0, 1.0],
-    "green": [1.0, 1.0, 1.0, 1.0, 1.0],
-    "red":   [1.0, 1.0, 1.0, 1.0, 1.0],
+    "blue":  [1.0, 1.0, 2.5, 1.0, 1.0, 1.0],
+    "green": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    "red":   [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
 }
 
 # 竿・ピク数ごとに釣れる最大レアリティ（RARITIESのインデックス）。
@@ -58,9 +58,15 @@ def _max_rarity_index(rod_type: str, piku: int) -> int:
     if rod_type == "blue":
         return 2 if piku >= 4 else 1   # 中魚はピク4-5のみ
     if rod_type == "green":
+        if piku == 5:
+            return 4   # 人魚はピク5のみ・超低確率
         return 3 if piku >= 4 else 2   # 大魚はピク4-5のみ
     if rod_type == "red":
-        return 4 if piku == 5 else 3   # リヴァイアサンはピク5のみ
+        if piku == 5:
+            return 5   # リヴァイアサンはピク5のみ
+        if piku == 4:
+            return 4   # 人魚はピク4-5のみ・超低確率
+        return 3
     raise ValueError(f"unknown rod_type: {rod_type}")
 
 
@@ -78,16 +84,18 @@ RARITY_PAYOUT_MULT = {
     "small":     1.2,
     "medium":    3,
     "large":     5,
+    "mermaid":   30,
     "leviathan": 50,
 }
 
-RARITIES = ["trash", "small", "medium", "large", "leviathan"]
+RARITIES = ["trash", "small", "medium", "large", "mermaid", "leviathan"]
 
 RARITY_DISPLAY = {
     "trash":     {"star": "☆",     "label": "ごみ"},
     "small":     {"star": "★",     "label": "小魚"},
     "medium":    {"star": "★★",    "label": "中魚"},
     "large":     {"star": "★★★",   "label": "大魚"},
+    "mermaid":   {"star": "★★★☆",  "label": "人魚"},
     "leviathan": {"star": "★★★★",  "label": "リヴァイアサン"},
 }
 
@@ -101,15 +109,21 @@ FISH_TABLE = {
         {"name": "ポイズナー",             "image": "poisner.png"},
         {"name": "カトラリーシュリンプ",   "image": "cutlery_shrimp.png"},
         {"name": "ギルフラッグ",           "image": "gill_flag.png"},
+        {"name": "テンノオトシゴ",         "image": "tennootoshigo.png"},
     ],
     "medium": [
         {"name": "マンボウモドキ",   "image": "manbow_modoki.png"},
         {"name": "インスタアロワナ", "image": "insta_arowana.png"},
+        {"name": "ウーベルパー",     "image": "uberru-pa-.png"},
     ],
     "large": [
         {"name": "サメクジラ",         "image": "samekujira.png"},
         {"name": "サンタマンダー",     "image": "santa_mander.png"},
         {"name": "ジャイアントイール", "image": "giant_eel.png"},
+        {"name": "ツリカジキ",         "image": "tsurikajiki.png"},
+    ],
+    "mermaid": [
+        {"name": "人魚", "image": "mermaid.png"},
     ],
     "leviathan": [
         {"name": "？？？", "image": "???.png"},
