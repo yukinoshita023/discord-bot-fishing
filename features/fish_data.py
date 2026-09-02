@@ -114,7 +114,7 @@ FISH_TABLE = {
     "medium": [
         {"name": "マンボウモドキ",   "image": "manbow_modoki.png"},
         {"name": "インスタアロワナ", "image": "insta_arowana.png"},
-        {"name": "ウーベルパー",     "image": "uberru-pa-.png"},
+        {"name": "ウーバールーパー", "image": "uberru-pa-.png"},
     ],
     "large": [
         {"name": "サメクジラ",         "image": "samekujira.png"},
