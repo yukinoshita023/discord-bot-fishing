@@ -123,7 +123,7 @@ FISH_TABLE = {
         {"name": "ツリカジキ",         "image": "tsurikajiki.png"},
     ],
     "mermaid": [
-        {"name": "人魚", "image": "mermaid.png"},
+        {"name": "ノワール？", "image": "mermaid.png"},
     ],
     "leviathan": [
         {"name": "？？？", "image": "???.png"},
